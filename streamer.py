@@ -23,6 +23,7 @@ class Streamer:
         self.receive_buffer = {}
         self.ack = False
         # self.ack_buffer = set()
+        self.finished = False
         self.closed = False
 
         # Start listener function
@@ -34,19 +35,24 @@ class Streamer:
             try:
                 # Get data and check headers
                 data, addr = self.socket.recvfrom()
-                curr_seq_num = unpack("!i", data[0:4])[0]
-                is_data = unpack("!?", data[4:5])[0]
-                body = data[5:]
 
-                if is_data:
-                    self.receive_buffer[curr_seq_num] = body
-                    # Sequence number is an integer
-                    # True = data, False = ACK
-                    acknowledgement = pack("!i", self.sequence_number) + pack("!?", False) + body
-                    self.socket.sendto(acknowledgement, (self.dst_ip, self.dst_port))
-                else:
-                    self.ack = True
-                    # self.ack_buffer.add(curr_seq_num)
+                if data:
+                    curr_seq_num = unpack("!i", data[0:4])[0]
+                    is_data = unpack("!?", data[4:5])[0]
+                    body = data[5:]
+
+                    if is_data:
+                        self.receive_buffer[curr_seq_num] = body
+                        # Sequence number is an integer
+                        # True = data, False = ACK
+                        acknowledgement = pack("!i", self.sequence_number) + pack("!?", False) + body
+                        self.socket.sendto(acknowledgement, (self.dst_ip, self.dst_port))
+                    else:
+                        self.ack = True
+                        # self.ack_buffer.add(curr_seq_num)
+
+                        if body == b"FIN":
+                            self.finished = True
 
             except Exception as e:
                 print("listener died!")
@@ -66,12 +72,15 @@ class Streamer:
             self.socket.sendto(packet, (self.dst_ip, self.dst_port))
             self.ack = False
 
-            counter = 0
+            timeout = time.time() + 0.25
             while not self.ack:
-                time.sleep(0.001)
-                if counter > 1000:
+                if time.time() > timeout:
+                    self.socket.sendto(packet, (self.dst_ip, self.dst_port))
+                    timeout = time.time() + 0.25
+                time.sleep(0.01)
+
+                if self.closed:
                     break
-                counter += 1
                 
 
 
@@ -131,6 +140,23 @@ class Streamer:
         """Cleans up. It should block (wait) until the Streamer is done with all
            the necessary ACKs and retransmissions"""
         # your code goes here, especially after you add ACKs and retransmissions.
+
+        # if not self.ack:
+        #     fin_packet = pack("!i", self.sequence_number) + pack("!?", False) + b"FIN"
+        #     self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
+
+        fin_packet = pack("!i", self.sequence_number) + pack("!?", False) + b"FIN"
+        self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
+            
+        timeout = time.time() + 0.25
+        while not self.finished:
+            if time.time() > timeout:
+                self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
+                timeout = time.time() + 0.25
+            time.sleep(0.01)
+        
+        time.sleep(2)
+
         self.closed = True
         self.socket.stoprecv()
 
