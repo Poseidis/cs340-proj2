@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 from hashlib import md5
 from threading import Lock, Timer
-
+import traceback
 
 class Streamer:
     def __init__(self, dst_ip, dst_port,
@@ -91,32 +91,31 @@ class Streamer:
                             
                             # If lowest ack no. has changed, reset timer to new lowest ack not received
                             if prev_expected_ack_number < self.expected_ack_number:
-                                self.lock.acquire() 
                                 self.timer.cancel()
                                 self.timer = Timer(0.25, self.timerResend, [self.expected_ack_number])
                                 self.timer.start()
-                                self.lock.release()
                                 # print( "- NEW TIMER FOR: " + str(self.expected_ack_number))
 
-                            self.in_flight.pop(curr_seq_num)
+                            if curr_seq_num in self.in_flight: 
+                                self.in_flight.pop(curr_seq_num)
 
                             if body == b"FIN":
                                 self.finished = True
 
             except Exception as e:
                 print("listener died!")
-                print(e)
+                print(repr(e))
+                print(traceback.format_exc())
 
     def timerResend(self, sequence_number):
         # print( "- EXPIRED")
-        self.socket.sendto(self.in_flight[sequence_number], (self.dst_ip, self.dst_port))
-        if sequence_number <= self.expected_ack_number:
-            self.lock.acquire()
-            self.timer.cancel()
-            self.timer = Timer(0.25, self.timerResend, [sequence_number])
-            self.timer.start()
-            self.lock.release()
-            # print( "- RESTARTED TIMER FOR: " + str(sequence_number))
+        if sequence_number in self.in_flight:
+            self.socket.sendto(self.in_flight[sequence_number], (self.dst_ip, self.dst_port))
+            if sequence_number <= self.expected_ack_number:
+                self.timer.cancel()
+                self.timer = Timer(0.25, self.timerResend, [sequence_number])
+                self.timer.start()
+                # print( "- RESTARTED TIMER FOR: " + str(sequence_number))
 
     def send(self, data_bytes: bytes) -> None:
         """Note that data_bytes can be larger than one packet."""
