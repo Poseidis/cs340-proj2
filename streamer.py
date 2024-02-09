@@ -56,8 +56,9 @@ class Streamer:
                         body = data[21:]
     
                         if is_data:
-                            
+                            self.lock.acquire()
                             self.receive_buffer[curr_seq_num] = body
+                            self.lock.release()
                             # Sequence number is an integer
                             # True = data, False = ACK
 
@@ -91,9 +92,11 @@ class Streamer:
                             
                             # If lowest ack no. has changed, reset timer to new lowest ack not received
                             if prev_expected_ack_number < self.expected_ack_number:
+                                self.lock.acquire()
                                 self.timer.cancel()
                                 self.timer = Timer(0.25, self.timerResend, [self.expected_ack_number])
                                 self.timer.start()
+                                self.lock.release()
                                 # print( "- NEW TIMER FOR: " + str(self.expected_ack_number))
 
                             if curr_seq_num in self.in_flight: 
@@ -112,9 +115,11 @@ class Streamer:
         if sequence_number in self.in_flight:
             self.socket.sendto(self.in_flight[sequence_number], (self.dst_ip, self.dst_port))
             if sequence_number <= self.expected_ack_number:
+                self.lock.acquire()
                 self.timer.cancel()
                 self.timer = Timer(0.25, self.timerResend, [sequence_number])
                 self.timer.start()
+                self.lock.release()
                 # print( "- RESTARTED TIMER FOR: " + str(sequence_number))
 
     def send(self, data_bytes: bytes) -> None:
@@ -134,7 +139,7 @@ class Streamer:
                 self.timer = Timer(0.25, self.timerResend, [self.sequence_number])
                 self.timer.start()
 
-            while len(self.in_flight) > 40:
+            while len(self.in_flight) > 32:
                 time.sleep(0.001)
 
             self.sequence_number += 1
@@ -172,12 +177,15 @@ class Streamer:
 
             # Sends data to reciever
             data = b""
+            self.lock.acquire()
             while self.expected_sequence_number in self.receive_buffer:
                 packet_data = self.receive_buffer.pop(self.expected_sequence_number)
+                if packet_data == b"FIN":
+                    self.finished = True
                 self.expected_sequence_number += 1
                 # return packet_data
                 data += packet_data
-
+            self.lock.release()
             
 
             if data:
