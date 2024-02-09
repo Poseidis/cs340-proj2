@@ -5,6 +5,7 @@ from socket import INADDR_ANY
 from struct import pack, unpack
 from concurrent.futures import ThreadPoolExecutor
 import time
+from hashlib import md5
 
 
 class Streamer:
@@ -34,25 +35,33 @@ class Streamer:
         while not self.closed: 
             try:
                 # Get data and check headers
-                data, addr = self.socket.recvfrom()
+                data, addr = self.socket.recvfrom() # BLOCKS HERE
 
                 if data:
-                    curr_seq_num = unpack("!i", data[0:4])[0]
-                    is_data = unpack("!?", data[4:5])[0]
-                    body = data[5:]
+                    hash = data[0:16] # unpack("!32s", --- )[0]
+                    
+                    desired_hash = bytes.fromhex(md5(data[16:]).hexdigest())
+                    # print("desired: " + str(desired_hash))
+                    # print("lalalal: " + str(hash))
+                    if desired_hash == hash: 
+                        curr_seq_num = unpack("!i", data[16:20])[0]
+                        is_data = unpack("!?", data[20:21])[0]
+                        body = data[21:]
+    
+                        if is_data:
+                            #
+                            self.receive_buffer[curr_seq_num] = body
+                            # Sequence number is an integer
+                            # True = data, False = ACK
+                            acknowledgement = pack("!i", curr_seq_num) + pack("!?", False) + body
+                            acknowledgement = bytes.fromhex(md5(acknowledgement).hexdigest()) + acknowledgement
+                            self.socket.sendto(acknowledgement, (self.dst_ip, self.dst_port))
+                        else:
+                            self.ack = True
+                            # self.ack_buffer.add(curr_seq_num)
 
-                    if is_data:
-                        self.receive_buffer[curr_seq_num] = body
-                        # Sequence number is an integer
-                        # True = data, False = ACK
-                        acknowledgement = pack("!i", self.sequence_number) + pack("!?", False) + body
-                        self.socket.sendto(acknowledgement, (self.dst_ip, self.dst_port))
-                    else:
-                        self.ack = True
-                        # self.ack_buffer.add(curr_seq_num)
-
-                        if body == b"FIN":
-                            self.finished = True
+                            if body == b"FIN":
+                                self.finished = True
 
             except Exception as e:
                 print("listener died!")
@@ -62,11 +71,13 @@ class Streamer:
         """Note that data_bytes can be larger than one packet."""
         # Your code goes here!  The code below should be changed!
 
-        max_packet_size = 1472 - 4 - 1    # max_packet_size = 1472 - 4 - 1
+        max_packet_size = 1472 - 4 - 1 - 16    # max_packet_size = 1472 - 4 - 1 - 32
         for i in range(0, len(data_bytes), max_packet_size): 
             # Sequence number is an integer
             # True = data, False = ACK
             packet = pack("!i", self.sequence_number) + pack("!?", True) + data_bytes[i:i + max_packet_size]
+            packet = bytes.fromhex(md5(packet).hexdigest()) + packet
+
             self.sequence_number += 1
 
             self.socket.sendto(packet, (self.dst_ip, self.dst_port))
@@ -146,6 +157,7 @@ class Streamer:
         #     self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
 
         fin_packet = pack("!i", self.sequence_number) + pack("!?", False) + b"FIN"
+        fin_packet = bytes.fromhex(md5(fin_packet).hexdigest()) + fin_packet
         self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
             
         timeout = time.time() + 0.25
