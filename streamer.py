@@ -6,6 +6,7 @@ from struct import pack, unpack
 from concurrent.futures import ThreadPoolExecutor
 import time
 from hashlib import md5
+from threading import Timer
 
 
 class Streamer:
@@ -21,11 +22,17 @@ class Streamer:
         # Added fields
         self.sequence_number = 0
         self.expected_sequence_number = 0
+        self.expected_ack_number = 0
+        self.times = {}
+        self.timeout = time.time() + 0.5
+        self.sent_buffer = {}
         self.receive_buffer = {}
         self.ack = False
         # self.ack_buffer = set()
         self.finished = False
         self.closed = False
+
+        self.timer = None
 
         # Start listener function
         self.executor = ThreadPoolExecutor(max_workers=1)
@@ -49,16 +56,23 @@ class Streamer:
                         body = data[21:]
     
                         if is_data:
-                            #
                             self.receive_buffer[curr_seq_num] = body
+
                             # Sequence number is an integer
                             # True = data, False = ACK
-                            acknowledgement = pack("!i", curr_seq_num) + pack("!?", False) + body
-                            acknowledgement = bytes.fromhex(md5(acknowledgement).hexdigest()) + acknowledgement
-                            self.socket.sendto(acknowledgement, (self.dst_ip, self.dst_port))
+                            if self.expected_sequence_number == curr_seq_num:
+                                acknowledgement = pack("!i", curr_seq_num) + pack("!?", False) + body
+                                acknowledgement = bytes.fromhex(md5(acknowledgement).hexdigest()) + acknowledgement
+                                self.socket.sendto(acknowledgement, (self.dst_ip, self.dst_port))
+                               
                         else:
-                            self.ack = True
-                            # self.ack_buffer.add(curr_seq_num)
+                            # self.ack = True
+                            ### self.ack_buffer.add(curr_seq_num)
+                            ## if self.expected_ack_number == curr_seq_num:
+                            ##     self.expected_ack_number += 1
+                            self.timer.cancel()
+                            self.timer = Timer()
+                            self.timer.start()
 
                             if body == b"FIN":
                                 self.finished = True
@@ -66,6 +80,11 @@ class Streamer:
             except Exception as e:
                 print("listener died!")
                 print(e)
+
+    def resendPackets(self):
+        for seq_num, packet in self.sent_buffer:
+            
+
 
     def send(self, data_bytes: bytes) -> None:
         """Note that data_bytes can be larger than one packet."""
@@ -78,20 +97,25 @@ class Streamer:
             packet = pack("!i", self.sequence_number) + pack("!?", True) + data_bytes[i:i + max_packet_size]
             packet = bytes.fromhex(md5(packet).hexdigest()) + packet
 
+            self.sent_buffer[self.sequence_number] = packet
+            self.times[self.sequence_number] = time.time()
+            self.socket.sendto(packet, (self.dst_ip, self.dst_port))
             self.sequence_number += 1
 
-            self.socket.sendto(packet, (self.dst_ip, self.dst_port))
-            self.ack = False
+            # self.ack = False
 
-            timeout = time.time() + 0.25
-            while not self.ack:
-                if time.time() > timeout:
-                    self.socket.sendto(packet, (self.dst_ip, self.dst_port))
-                    timeout = time.time() + 0.25
-                time.sleep(0.01)
+            # self.timer = Timer(0.5, )
+            # self.timer.start()
 
-                if self.closed:
-                    break
+            # timeout = time.time() + 0.25
+            # while not self.ack:
+            #     if time.time() > timeout:
+            #         self.socket.sendto(packet, (self.dst_ip, self.dst_port))
+            #         timeout = time.time() + 0.25
+            #     time.sleep(0.01)
+
+            #     if self.closed:
+            #         break
                 
 
 
@@ -126,7 +150,7 @@ class Streamer:
             # print(self.receive_buffer)
 
             data = b""
-            while self.expected_sequence_number in self.receive_buffer:
+            if self.expected_sequence_number in self.receive_buffer:
                 packet_data = self.receive_buffer.pop(self.expected_sequence_number)
                 self.expected_sequence_number += 1
                 # return packet_data
