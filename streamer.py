@@ -93,7 +93,7 @@ class Streamer:
                             if prev_expected_ack_number < self.expected_ack_number:
                                 self.lock.acquire() 
                                 self.timer.cancel()
-                                self.timer = Timer(0.2, self.timerResend, [self.expected_ack_number])
+                                self.timer = Timer(0.25, self.timerResend, [self.expected_ack_number])
                                 self.timer.start()
                                 self.lock.release()
                                 # print( "- NEW TIMER FOR: " + str(self.expected_ack_number))
@@ -113,7 +113,7 @@ class Streamer:
         if sequence_number <= self.expected_ack_number:
             self.lock.acquire()
             self.timer.cancel()
-            self.timer = Timer(0.2, self.timerResend, [sequence_number])
+            self.timer = Timer(0.25, self.timerResend, [sequence_number])
             self.timer.start()
             self.lock.release()
             # print( "- RESTARTED TIMER FOR: " + str(sequence_number))
@@ -132,10 +132,10 @@ class Streamer:
             self.in_flight[self.sequence_number] = packet
 
             if self.timer == None:
-                self.timer = Timer(0.2, self.timerResend, [self.sequence_number])
+                self.timer = Timer(0.25, self.timerResend, [self.sequence_number])
                 self.timer.start()
 
-            while len(self.in_flight) > 32:
+            while len(self.in_flight) > 40:
                 time.sleep(0.001)
 
             self.sequence_number += 1
