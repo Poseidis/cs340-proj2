@@ -6,7 +6,7 @@ from struct import pack, unpack
 from concurrent.futures import ThreadPoolExecutor
 import time
 from hashlib import md5
-from threading import Timer
+from threading import Timer, Lock
 
 
 class Streamer:
@@ -30,6 +30,8 @@ class Streamer:
         self.ack_buffer = set()
         self.finished = False
         self.closed = False
+        self.receive_buffer_lock = Lock()
+        self.in_flight_lock = Lock()
 
         # Start listener function
         self.executor = ThreadPoolExecutor(max_workers=1)
@@ -45,19 +47,28 @@ class Streamer:
                 data, addr = self.socket.recvfrom() # BLOCKS HERE
 
                 if data:
-                    hash = data[0:16] # unpack("!32s", --- )[0]
+                    recv_hash = data[0:16] # unpack("!32s", --- )[0]
                     
                     desired_hash = bytes.fromhex(md5(data[16:]).hexdigest())
                     # print("desired: " + str(desired_hash))
                     # print("lalalal: " + str(hash))
-                    if desired_hash == hash: 
+                    if desired_hash == recv_hash: 
                         curr_seq_num = unpack("!i", data[16:20])[0]
                         is_data = unpack("!?", data[20:21])[0]
                         body = data[21:]
     
                         if is_data:
-                            if curr_seq_num not in self.receive_buffer:
-                                self.receive_buffer[curr_seq_num] = body
+                            if body == b"FIN":
+                                if curr_seq_num == self.expected_sequence_number:
+                                    fin_packet = pack("!i", curr_seq_num) + pack("!?", False) + b"FIN"
+                                    fin_packet = bytes.fromhex(md5(fin_packet).hexdigest()) + fin_packet
+                                    self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
+
+                                    self.finished = True
+                            else:
+                                with self.receive_buffer_lock:
+                                    if curr_seq_num not in self.receive_buffer and curr_seq_num >= self.expected_sequence_number:
+                                        self.receive_buffer[curr_seq_num] = body
                             # Sequence number is an integer
                             # True = data, False = ACK
                             # else:
@@ -72,13 +83,28 @@ class Streamer:
                                 #     acknowledgement = pack("!i", self.expected_ack_number) + pack("!?", False) #+ body
                                 #     acknowledgement = bytes.fromhex(md5(acknowledgement).hexdigest()) + acknowledgement
                                 #     self.socket.sendto(acknowledgement, (self.dst_ip, self.dst_port))
+                                
+                                # else:
+                                #     if body == b"FIN" and curr_seq_num == self.expected_sequence_number:
+                                #         fin_packet = pack("!i", curr_seq_num) + pack("!?", False) + b"FIN"
+                                #         fin_packet = bytes.fromhex(md5(fin_packet).hexdigest()) + fin_packet
+                                #         self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
                         else:
+                                
                             # self.ack = True
                             # self.ack_buffer.add(curr_seq_num)
-                            if curr_seq_num > self.expected_ack_number:
+                            if curr_seq_num >= self.expected_ack_number:
                                 # for i in range(self.expected_ack_number, curr_seq_num):
                                 #     self.send_buffer.pop(self.send_buffer[i])
                                 #     print(self.send_buffer)
+                                with self.in_flight_lock:
+                                    print('hiiii')
+                                    # if curr_seq_num in self.in_flight:
+                                    print(len(self.in_flight))
+                                    for i in range(self.expected_ack_number, curr_seq_num + 1):
+                                        if i in self.in_flight:
+                                            self.in_flight.pop(i)
+                                    print(len(self.in_flight))
 
                                 self.expected_ack_number = curr_seq_num + 1
                                 # print(self.expected_ack_number)
@@ -88,26 +114,35 @@ class Streamer:
                                 self.timer.start()
 
                             if body == b"FIN":
+                                # fin_packet = pack("!i", curr_seq_num) + pack("!?", False) + b"FIN"
+                                # fin_packet = bytes.fromhex(md5(fin_packet).hexdigest()) + fin_packet
+                                # self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
+
                                 self.finished = True
 
             except Exception as e:
                 print("listener died!")
                 print(e)
+        self.executor.shutdown()
 
     def retransmit(self):
-        if self.closed:
-            self.timer.cancel()
-            self.timer = Timer(0.25, self.retransmit)
-            self.timer.start()
-        else:
+        # if self.closed:
+        #     # self.timer.cancel()
+        #     # self.timer = Timer(0.25, self.retransmit)
+        #     # self.timer.start()
+        #     exit()
+        # else:
+        if not self.closed:
             # print("hiiiiiiiiiiiiiiiiiiiii")
             # print(self.expected_ack_number)
             # print(self.sequence_number)
             for seq_num in range(self.expected_ack_number, self.sequence_number):
-                self.socket.sendto(self.send_buffer[seq_num], (self.dst_ip, self.dst_port))
+                if seq_num in self.in_flight:
+                    self.socket.sendto(self.send_buffer[seq_num], (self.dst_ip, self.dst_port))
             self.timer.cancel()
             self.timer = Timer(0.25, self.retransmit)
             self.timer.start()
+        exit()
             
 
     def send(self, data_bytes: bytes) -> None:
@@ -127,10 +162,13 @@ class Streamer:
             self.socket.sendto(packet, (self.dst_ip, self.dst_port))
             self.ack = False
 
-            self.in_flight[self.sequence_number] = packet
+            with self.in_flight_lock:
+                self.in_flight[self.sequence_number] = packet
             self.send_buffer[self.sequence_number] = packet
             
             self.sequence_number += 1
+
+            # time.sleep(0.01)
 
             # timeout = time.time() + 0.25
             # while not self.ack:
@@ -175,17 +213,21 @@ class Streamer:
             # print(self.receive_buffer)
 
             data = b""
-            if self.expected_sequence_number in self.receive_buffer:
-                packet_data = self.receive_buffer.pop(self.expected_sequence_number)
-                acknowledgement = pack("!i", self.expected_sequence_number) + pack("!?", False) #+ body
-                acknowledgement = bytes.fromhex(md5(acknowledgement).hexdigest()) + acknowledgement
-                self.socket.sendto(acknowledgement, (self.dst_ip, self.dst_port))
-                self.expected_sequence_number += 1
-                # return packet_data
-                data += packet_data
+            with self.receive_buffer_lock:
+                if self.expected_sequence_number in self.receive_buffer:
+                    packet_data = self.receive_buffer.pop(self.expected_sequence_number)
+
+                    acknowledgement = pack("!i", self.expected_sequence_number) + pack("!?", False) + packet_data
+                    acknowledgement = bytes.fromhex(md5(acknowledgement).hexdigest()) + acknowledgement
+                    self.socket.sendto(acknowledgement, (self.dst_ip, self.dst_port))
+
+                    self.expected_sequence_number += 1
+                    data += packet_data
 
             if data:
                 return data
+
+            time.sleep(0.1)
 
             # else:
             #     self.receive_buffer[curr_seq_num] = data[4:]
@@ -207,13 +249,17 @@ class Streamer:
         # if not self.ack:
         #     fin_packet = pack("!i", self.sequence_number) + pack("!?", False) + b"FIN"
         #     self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
-        # while len(self.in_flight) > 0:
-        #     time.sleep(0.01)
+        while len(self.receive_buffer) > 0:
+            time.sleep(0.01)
         # while self.sequence_number > self.expected_ack_number:
         #     time.sleep(0.01)
         #     print("HIIii")
         #     print(self.expected_sequence_number)
         #     print(self.expected_ack_number)
+
+        # while len(self.in_flight) > 0:
+        #     # print(self.in_flight)
+        #     time.sleep(0.01)
 
         fin_packet = pack("!i", self.sequence_number) + pack("!?", False) + b"FIN"
         fin_packet = bytes.fromhex(md5(fin_packet).hexdigest()) + fin_packet
@@ -224,9 +270,12 @@ class Streamer:
             if time.time() > timeout:
                 self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
                 timeout = time.time() + 0.25
+            print(self.finished)
             time.sleep(0.01)
         
-        time.sleep(2)
+        time.sleep(4)
 
         self.closed = True
+        self.timer.cancel()
+        self.executor.shutdown()
         self.socket.stoprecv()
