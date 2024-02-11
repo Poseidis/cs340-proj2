@@ -61,7 +61,7 @@ class Streamer:
                         if is_data:
                             if body == b"FIN":
                                 if curr_seq_num == self.expected_sequence_number:
-                                    print("BYEEEEEE")
+                                    # print("BYEEEEEE")
                                     fin_packet = pack("!i", curr_seq_num) + pack("!?", False) + b"FIN"
                                     fin_packet = bytes.fromhex(md5(fin_packet).hexdigest()) + fin_packet
                                     self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
@@ -98,7 +98,7 @@ class Streamer:
                                 #         self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
                         else:
                             if body == b"FIN":
-                                print("GOTTEM")
+                                # print("GOTTEM")
                                 self.finished = True
                             else:
                             # self.ack = True
@@ -110,13 +110,13 @@ class Streamer:
                                     #     self.send_buffer.pop(self.send_buffer[i])
                                     #     print(self.send_buffer)
                                     with self.in_flight_lock:
-                                        print('hiiii')
+                                        # print('hiiii')
                                         # if curr_seq_num in self.in_flight:
-                                        print(len(self.in_flight))
+                                        # print(len(self.in_flight))
                                         for i in range(self.expected_ack_number, curr_seq_num + 1):
                                             if i in self.in_flight:
                                                 self.in_flight.pop(i)
-                                        print(len(self.in_flight))
+                                        # print(len(self.in_flight))
 
                                     self.expected_ack_number = curr_seq_num + 1
                                     # print(self.expected_ack_number)
@@ -149,7 +149,7 @@ class Streamer:
             # print(self.sequence_number)
             for seq_num in range(self.expected_ack_number, self.sequence_number):
                 if seq_num in self.in_flight:
-                    print("RESENDING: " + str(seq_num))
+                    # print("RESENDING: " + str(seq_num))
                     self.socket.sendto(self.send_buffer[seq_num], (self.dst_ip, self.dst_port))
             self.timer.cancel()
             self.timer = Timer(0.25, self.retransmit)
@@ -269,14 +269,14 @@ class Streamer:
         #     print(self.expected_ack_number)
 
         while len(self.in_flight) > 0:
-            print("SOMETHING IN FLIGHT")
-            print(self.in_flight)
+            # print("SOMETHING IN FLIGHT")
+            # print(self.in_flight)
             time.sleep(0.01)
 
         fin_packet = pack("!i", self.sequence_number) + pack("!?", True) + b"FIN"
         fin_packet = bytes.fromhex(md5(fin_packet).hexdigest()) + fin_packet
         self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
-        print("FIN SENT")
+        # print("FIN SENT")
             
         timeout = time.time() + 0.25
         while not self.finished and not self.close_request:
@@ -284,7 +284,7 @@ class Streamer:
             if time.time() > timeout:
                 self.socket.sendto(fin_packet, (self.dst_ip, self.dst_port))
                 timeout = time.time() + 0.25
-            print(self.finished)
+            # print(self.finished)
             time.sleep(0.01)
 
             # if self.close_request:
